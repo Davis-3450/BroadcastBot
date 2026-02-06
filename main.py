@@ -2,8 +2,8 @@ import os
 import time
 import json
 import logging
+import httpx
 from openai import OpenAI
-from instagrapi import Client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -35,7 +35,7 @@ def get_reference_content(path):
         return ""
 
 def generate_message(client, model, reference_content, prompt_template):
-    system_prompt = "You are a helpful assistant that generates interesting messages."
+    system_prompt = "You are a helpful assistant that generates interesting messages for a Telegram channel."
     if reference_content:
         system_prompt += f"\n\nReference Material:\n{reference_content}"
 
@@ -54,18 +54,25 @@ def generate_message(client, model, reference_content, prompt_template):
         logger.error(f"Error generating message: {e}")
         return None
 
-def broadcast_message(cl, target_id, message):
-    try:
-        # Convert target_id to int if possible, as thread_ids are usually ints
-        try:
-            thread_id = int(target_id)
-        except (ValueError, TypeError):
-            logger.error(f"Invalid target ID format: {target_id}. Must be an integer.")
-            return False
+def broadcast_message(bot_token, chat_id, message):
+    """
+    Broadcasts a message to a Telegram channel using the Telegram Bot API.
+    """
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "Markdown" # Optional: allow markdown formatting
+    }
 
-        cl.direct_send(message, thread_ids=[thread_id])
+    try:
+        response = httpx.post(url, json=payload, timeout=10.0)
+        response.raise_for_status()
         logger.info("Message broadcasted successfully.")
         return True
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error broadcasting message: {e.response.status_code} - {e.response.text}")
+        return False
     except Exception as e:
         logger.error(f"Error broadcasting message: {e}")
         return False
@@ -76,9 +83,8 @@ def main():
         api_key = get_env_var("OPENAI_API_KEY", required=True)
         model = get_env_var("OPENAI_MODEL", "gpt-4o")
 
-        ig_user = get_env_var("IG_USERNAME", required=True)
-        ig_pass = get_env_var("IG_PASSWORD", required=True)
-        ig_target_id = get_env_var("IG_TARGET_ID", required=True)
+        tg_token = get_env_var("TELEGRAM_BOT_TOKEN", required=True)
+        tg_chat_id = get_env_var("TELEGRAM_CHANNEL_ID", required=True)
 
         ref_doc_path = get_env_var("REFERENCE_DOC_PATH")
         # Default interval to 1 hour
@@ -90,16 +96,6 @@ def main():
 
     # Initialize clients
     openai_client = OpenAI(api_key=api_key)
-    ig_client = Client()
-
-    # IG Login
-    try:
-        logger.info(f"Logging in as {ig_user}...")
-        ig_client.login(ig_user, ig_pass)
-        logger.info("Logged in successfully.")
-    except Exception as e:
-        logger.error(f"Failed to login to Instagram: {e}")
-        return
 
     logger.info("Bot started.")
 
@@ -111,7 +107,7 @@ def main():
 
             if message:
                 logger.info(f"Generated message: {message[:50]}...")
-                success = broadcast_message(ig_client, ig_target_id, message)
+                success = broadcast_message(tg_token, tg_chat_id, message)
                 if not success:
                     logger.warning("Failed to broadcast message.")
             else:
